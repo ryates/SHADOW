@@ -512,18 +512,20 @@ void onInitPS3Nav2()
 String getLastConnectedBtMAC()
 {
     String btAddress = "";
-    for(int8_t i = 5; i > 0; i--)
+    for(int8_t i = 5; i >= 0; i--)
     {
+        if (btAddress.length() > 0)
+        {
+            btAddress +=(":");
+        }
         if (Btd.disc_bdaddr[i]<0x10)
         {
             btAddress +="0";
         }
         btAddress += String(Btd.disc_bdaddr[i], HEX);
-        btAddress +=(":");
     }
-    btAddress += String(Btd.disc_bdaddr[0], HEX);
     btAddress.toUpperCase();
-    return btAddress; 
+    return btAddress;
 }
 
 void swapPS3NavControllers()
