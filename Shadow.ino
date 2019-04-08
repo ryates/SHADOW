@@ -1,9 +1,12 @@
 // =======================================================================================
 //                 SHADOW :  Small Handheld Arduino Droid Operating Wand
 // =======================================================================================
-//                          Last Revised Date: 10/05/14
+//                          Last Revised Date: 4/15/19
 //                             Written By: KnightShade
 //                        Inspired by the PADAWAN by danf
+//                      Bug Fixes from BlackSnake and vint43
+//	       Contributions for PWM Motor Controllers by JoyMonkey/Paul Murphy
+//                            With credit to Brad/BHD
 // =======================================================================================
 //
 //         This program is free software: you can redistribute it and/or modify it .
@@ -60,8 +63,9 @@
 //Primary Controller bound to Parani UD-100 
 String PS3MoveNavigatonPrimaryMAC = "00:07:04:05:EA:DF"; //If using multiple controlers, designate a primary
 
+#define FOOT_CONTROLLER 1 //0 for Sabertooth Serial or 1 for individual R/C output (for Q85/NEO motors with 1 controller for each foot, or Sabertooth Mode 2 Independant Mixing)
 
-byte drivespeed1 = 70;   //set these 3 to whatever speeds work for you. 0-stop, 127-full speed.
+byte drivespeed1 = 25;   //set these 3 to whatever speeds work for you. 0-stop, 127-full speed.
 byte drivespeed2 = 127;  //Recommend beginner: 50 to 75, experienced: 100 to 127, I like 100.
 
 byte turnspeed = 75; //50;     // the higher this number the faster it will spin in place, lower - easier to control.
@@ -72,16 +76,23 @@ byte domespeed = 100;    // If using a speed controller for the dome, sets the t
 
 byte ramping = 6; //3;        // Ramping- the lower this number the longer R2 will take to speedup or slow down,
                          // change this by increments of 1
+int footDriveSpeed = 0;  //This was moved to be global to support better ramping of NPC Motors
 
 byte joystickFootDeadZoneRange = 15;  // For controllers that centering problems, use the lowest number with no drift
-byte joystickDomeDeadZoneRange = 10;  // For controllers that centering problems, use the lowest number with nfo drift
+byte joystickDomeDeadZoneRange = 10;  // For controllers that centering problems, use the lowest number with no drift
 byte driveDeadBandRange = 10;     // Used to set the Sabertooth DeadZone for foot motors
 
 int invertTurnDirection = -1;   //This may need to be set to 1 for some configurations
+byte domeAutoSpeed = 127;     // Speed used when dome automation is active (1- 127)
+int time360DomeTurnLeft = 1000;  // milliseconds for dome to complete 360 turn at domeAutoSpeed
+int time360DomeTurnRight = 300;  // milliseconds for dome to complete 360 turn at domeAutoSpeed
+                                ///Cut in half to reduce spin.  Offset for different rotation startups due to gearing.
 
 //#define TEST_CONROLLER   //Support coming soon
 #define SHADOW_DEBUG       //uncomment this for console DEBUG output
 #define SHADOW_VERBOSE     //uncomment this for console VERBOSE output
+//#define BLUETOOTH_SERIAL     //uncomment this for console output via bluetooth.  
+// NOTE:  BLUETOOTH_SERIAL is suspected of adding CPU load in high traffic areas
 
 // ---------------------------------------------------------------------------------------
 //                          Drive Controller Settings
@@ -92,6 +103,12 @@ int motorControllerBaudRate = 9600; // Set the baud rate for the Syren motor con
                                     
 #define SYREN_ADDR         129      // Serial Address for Dome Syren
 #define SABERTOOTH_ADDR    128      // Serial Address for Foot Sabertooth
+
+// R/C Mode settings...
+#define leftFootPin 44    //connect this pin to motor controller for left foot (R/C mode)
+#define rightFootPin 45   //connect this pin to motor controller for right foot (R/C mode)
+#define leftDirection 1   //change this if your motor is spinning the wrong way
+#define rightDirection 0  //change this if your motor is spinning the wrong way  
 
 
 // ---------------------------------------------------------------------------------------
@@ -123,8 +140,8 @@ int motorControllerBaudRate = 9600; // Set the baud rate for the Syren motor con
 
 //Utility Arm Contribution by Dave C.
 //TODO:  Move PINS to upper part of Mega for Shield purposes
-const int UTILITY_ARM_BOTTOM_PIN  = 9;
-const int UTILITY_ARM_TOP_PIN   = 11;
+const int UTILITY_ARM_TOP_PIN   = 49;
+const int UTILITY_ARM_BOTTOM_PIN  = 50;
 
 int utilArmClosedPos = 0;    // variable to store the servo closed position 
 int utilArmOpenPos = 140;    // variable to store the servo Opened position 
@@ -146,7 +163,7 @@ const int UTIL_ARM_BOTTOM = 2;
 //Coin Slot LED Contribution by Dave C.
 //TODO:  Move PINS to upper part of Mega for Shield purposes
 #define numberOfCoinSlotLEDs 3
-int COIN_SLOT_LED_PINS[] = { 2, 3, 4 }; // LED pins to use.
+int COIN_SLOT_LED_PINS[] = { 47, 48, 49 }; // LED pins to use.
 long nextCoinSlotLedFlash[numberOfCoinSlotLEDs]; // Array indicating which LED to flash next.
 int coinSlotLedState[numberOfCoinSlotLEDs]; // Array indicating the state of the LED's.
 
@@ -208,9 +225,11 @@ long previousDomeMillis = millis();
 long previousFootMillis = millis();
 long currentMillis = millis();
 int serialLatency = 25;   //This is a delay factor in ms to prevent queueing of the Serial data.
-                          //25ms seems approprate for HardwareSerial, values of 50ms or larger are needed for Softare Emulation
+                          //25ms seems appropriate for HardwareSerial, values of 50ms or larger are needed for Softare Emulation
 
+#if FOOT_CONTROLLER == 0
 Sabertooth *ST=new Sabertooth(SABERTOOTH_ADDR, Serial2);
+#endif
 Sabertooth *SyR=new Sabertooth(SYREN_ADDR, Serial2);
 
 
@@ -308,8 +327,10 @@ uint32_t currentTime = 0;
 uint32_t lastLoopTime = 0;
 int badPS3Data = 0;
 
+#ifdef BLUETOOTH_SERIAL
 SPP SerialBT(&Btd,"Astromech:R2","1977"); // Create a BT Serial device(defaults: "Arduino" and the pin to "0000" if not set)
 boolean firstMessage = true;
+#endif
 String output = "";
 
 boolean isFootMotorStopped = true;
@@ -318,17 +339,29 @@ boolean isDomeMotorStopped = true;
 boolean isPS3NavigatonInitialized = false;
 boolean isSecondaryPS3NavigatonInitialized = false;
 
-byte vol = 50; // 0 = full volume, 255 off
+byte vol = 0; // 0 = full volume, 255 off
 boolean isStickEnabled = true;
 byte isAutomateDomeOn = false;
 unsigned long automateMillis = 0;
-byte automateDelay = random(5,20);// set this to min and max seconds between sounds
-int domeAutomationTurnDirection = 20;
+
+// Dome Automation Variables
+boolean domeAutomation = false;
+int domeTurnDirection = 1;  // 1 = positive turn, -1 negative turn
+float domeTargetPosition = 0; // (0 - 359) - degrees in a circle, 0 = home
+unsigned long domeStopTurnTime = 0;    // millis() when next turn should stop
+unsigned long domeStartTurnTime = 0;  // millis() when next turn should start
+int domeStatus = 0;  // 0 = stopped, 1 = prepare to turn, 2 = turning
+
+
 byte action = 0;
 unsigned long DriveMillis = 0;
 
 Servo UtilArmTopServo;  // create servo object to control a servo 
 Servo UtilArmBottomServo;  // create servo object to control a servo
+#if FOOT_CONTROLLER ==1
+Servo leftFootSignal;
+Servo rightFootSignal;
+#endif
 
 // =======================================================================================
 //                          Main Program
@@ -370,11 +403,16 @@ void setup()
     SyR->autobaud();
     SyR->setTimeout(300);      //DMB:  How low can we go for safety reasons?  multiples of 100ms
 
+    #if FOOT_CONTROLLER == 0
     //Setup for Sabertooth / Foot Motors
     ST->autobaud();          // Send the autobaud command to the Sabertooth controller(s).
     ST->setTimeout(300);      //DMB:  How low can we go for safety reasons?  multiples of 100ms
     ST->setDeadband(driveDeadBandRange);
-    ST->stop(); 
+    #elif FOOT_CONTROLLER == 1
+    leftFootSignal.attach(leftFootPin);
+    rightFootSignal.attach(rightFootPin);
+    #endif
+    stopFeet();
 
     // NOTE: *Not all* Sabertooth controllers need the autobaud command.
     //       It doesn't hurt anything, but V2 controllers use an
@@ -428,6 +466,12 @@ boolean readUSB()
     {
       //We have a fault condition that we want to ensure that we do NOT process any controller data!!!
       flushAndroidTerminal();
+      return false;
+    }
+	//Fix backported from Shadow_MD to fix "Dome Twitch"
+    if (criticalFaultDetectNav2())
+    { 
+      //We have a fault condition that we want to ensure that we do NOT process any controller data!!!
       return false;
     }
     return true;
@@ -515,7 +559,7 @@ String getLastConnectedBtMAC()
     for(int8_t i = 5; i >= 0; i--)
     {
         if (btAddress.length() > 0)
-        {
+    {
             btAddress +=(":");
         }
         if (Btd.disc_bdaddr[i]<0x10)
@@ -525,7 +569,7 @@ String getLastConnectedBtMAC()
         btAddress += String(Btd.disc_bdaddr[i], HEX);
     }
     btAddress.toUpperCase();
-    return btAddress;
+    return btAddress; 
 }
 
 void swapPS3NavControllers()
@@ -545,6 +589,7 @@ void swapPS3NavControllers()
 
 void initAndroidTerminal()
 {
+    #ifdef BLUETOOTH_SERIAL
     //Setup for Bluetooth Serial Monitoring
     if (SerialBT.connected)
     {
@@ -561,6 +606,7 @@ void initAndroidTerminal()
     {
         firstMessage = true;
     }
+    #endif
 }
 
 void flushAndroidTerminal()
@@ -568,9 +614,11 @@ void flushAndroidTerminal()
     if (output != "")
     {
         if (Serial) Serial.println(output);
+        #ifdef BLUETOOTH_SERIAL
         if (SerialBT.connected)
             SerialBT.println(output);
             SerialBT.send();
+        #endif
         output = ""; // Reset output string
     }
 }
@@ -578,54 +626,107 @@ void flushAndroidTerminal()
 
 void automateDome()
 {
-  /////////////automate
+    //automate dome movement
     if (isAutomateDomeOn)
     {
-        //TODO:  We have other conditions where the dome is moving
-        if ( abs(PS3Nav->getAnalogHat(LeftHatY)-128) > joystickFootDeadZoneRange)
+      long rndNum;
+      int domeSpeed;
+      if (domeStatus == 0)  // Dome is currently stopped - prepare for a future turn
         {
-            automateMillis = millis();
+        if (domeTargetPosition == 0)  // Dome is currently in the home position - prepare to turn away
+        {
+          domeStartTurnTime = millis() + (random(3, 10) * 1000);
+          rndNum = random(5,354);
+          domeTargetPosition = rndNum;  // set the target position to a random degree of a 360 circle - shaving off the first and last 5 degrees
+          
+          if (domeTargetPosition < 180)  // Turn the dome in the positive direction
+          {
+            domeTurnDirection = 1;
+            domeStopTurnTime = domeStartTurnTime + ((domeTargetPosition / 360) * time360DomeTurnRight);
         }
-        currentMillis = millis();
-        if (currentMillis - automateMillis > (automateDelay*1000))
+          else  // Turn the dome in the negative direction
         {
-            automateMillis = millis();
-            action = random(1,5);
-            if (action>1)
-            {
-              //DMB:  Random Sounds, and Dome movement shouldn't be tied 1:1
-              //TODO:  Add Sound Automation Routine
-              #ifdef SOUND_MP3TRIGGER
-              (trigger.play(random(32,52)));
-              #endif
-            }
-            if (action<4)
-            {
-                  Serial.println("automation of Dome");			
-                  rotateDome(domeAutomationTurnDirection,"Automation");
-                  //DMB:  The delay statement below is a critial failing (IMO) as this locks out control.
-                  //TODO:  Rework Dome Automation! 
-                  delay(500);
-                  rotateDome(0,"Automation");
-                if (domeAutomationTurnDirection>0)
+            domeTurnDirection = -1;
+            domeStopTurnTime = domeStartTurnTime + (((360 - domeTargetPosition) / 360) * time360DomeTurnLeft);
+          }
+        }
+        else  // Dome is not in the home position - send it back to home
+        {
+          domeStartTurnTime = millis() + (random(3, 10) * 1000);
+          
+          if (domeTargetPosition < 180)
                 {
-                    domeAutomationTurnDirection = -45;
+            domeTurnDirection = -1;
+            domeStopTurnTime = domeStartTurnTime + ((domeTargetPosition / 360) * time360DomeTurnLeft);
                 }
                 else
                 {
-                    domeAutomationTurnDirection = 45;
+            domeTurnDirection = 1;
+            domeStopTurnTime = domeStartTurnTime + (((360 - domeTargetPosition) / 360) * time360DomeTurnRight);
                 }
+          
+          domeTargetPosition = 0;
+        
             }
-            automateDelay = random(5,20);// set this to min and max seconds between sounds
+        
+        domeStatus = 1;  // Set dome status to preparing for a future turn
+         
+        #ifdef SHADOW_DEBUG
+          output += "Dome Automation: Initial Turn Set\r\n";
+          output +=  "Current Time: ";
+          output +=  millis();
+          output += "\r\n Next Start Time: ";
+          output += domeStartTurnTime;
+          output += "\r\n";
+          output += "Next Stop Time: ";
+          output += domeStopTurnTime;
+          output += "\r\n";          
+          output += "Dome Target Position: ";
+          output += domeTargetPosition;
+          output += "\r\n";          
+        #endif
         }
+      
+      if (domeStatus == 1)  // Dome is prepared for a future move - start the turn when ready
+      {
+        if (domeStartTurnTime < millis())
+        {
+          domeStatus = 2; 
+  
+          #ifdef SHADOW_DEBUG
+            output += "Dome Automation: Ready To Start Turn\r\n";
+          #endif
     }
 }
 
+      if (domeStatus == 2) // Dome is now actively turning until it reaches its stop time
+      {
+        if (domeStopTurnTime > millis())
+        {
+          domeSpeed = domeAutoSpeed * domeTurnDirection;
+          SyR->motor(domeSpeed);
+          
+          #ifdef SHADOW_DEBUG
+            output += "Turning Now!!\r\n";
+          #endif
+        } 
+        else  // turn completed - stop the motor
+        {
+          domeStatus = 0;
+          SyR->stop();
 
+          #ifdef SHADOW_DEBUG
+            output += "STOP TURN!!\r\n";
+          #endif
+        }
+      }
+    }
+}
 
 // =======================================================================================
 // //////////////////////////Process PS3 Controller Fault Detection///////////////////////
 // =======================================================================================
+//TODO:  boolean criticalFaultDetect(PS3BT* myPS3 = PS3Nav, int controllerNumber = 1)
 boolean criticalFaultDetect()
 {
     if (PS3Nav->PS3NavigationConnected || PS3Nav->PS3Connected)
@@ -650,7 +751,7 @@ boolean criticalFaultDetect()
               output += "It has been 100ms since we heard from the PS3 Controller\r\n";
               output += "Shut downing motors, and watching for a new PS3 message\r\n";
             #endif
-            ST->stop();
+            stopFeet();
             SyR->stop();
             isFootMotorStopped = true;
             return true;
@@ -695,7 +796,7 @@ boolean criticalFaultDetect()
         if ( badPS3Data > 10 )
         {
             #ifdef SHADOW_DEBUG
-                output += "Too much bad data coming fromo the PS3 Controller\r\n";
+                output += "Too much bad data coming from the PS3 Controller\r\n";
                 output += "Disconnecting the controller.\r\n";
             #endif
             PS3Nav->disconnect();
@@ -707,7 +808,7 @@ boolean criticalFaultDetect()
             output += "No Connected Controllers were found\r\n";
             output += "Shuting downing motors, and watching for a new PS3 message\r\n";
         #endif
-        ST->stop();
+        stopFeet();
         SyR->stop();
         isFootMotorStopped = true;
         return true;
@@ -717,6 +818,183 @@ boolean criticalFaultDetect()
 // =======================================================================================
 // //////////////////////////END of PS3 Controller Fault Detection///////////////////////
 // =======================================================================================
+
+// =======================================================================================
+// //////////////////////////Process of PS3 Secondary Controller Fault Detection//////////
+// =======================================================================================
+//TODO:  This is moved as is, but should merge with above function.
+boolean criticalFaultDetectNav2()
+{
+  if (PS3Nav2->PS3NavigationConnected || PS3Nav2->PS3Connected)
+  {
+    lastMsgTime = PS3Nav2->getLastMessageTime();
+    currentTime = millis();
+    
+    if ( currentTime >= lastMsgTime)
+    {
+      msgLagTime = currentTime - lastMsgTime;
+    } 
+    else
+    {
+      #ifdef SHADOW_DEBUG
+        output += "Waiting for PS3Nav Secondary Controller Data\r\n";
+      #endif
+      badPS3Data++;
+      msgLagTime = 0;
+    }
+    
+    if ( msgLagTime > 10000 )
+    {
+      #ifdef SHADOW_DEBUG
+        output += "It has been 10s since we heard from the PS3 secondary Controller\r\n";
+        output += "msgLagTime:";
+        output += msgLagTime;
+        output += " lastMsgTime:";
+        output += lastMsgTime;
+        output += " millis:";
+        output += millis(); 
+        output += "\r\nDisconnecting the secondary controller.\r\n";
+      #endif
+      SyR->stop();
+      PS3Nav2->disconnect();
+      return true;
+    }
+    
+    //Check PS3 Signal Data
+    if(!PS3Nav2->getStatus(Plugged) && !PS3Nav2->getStatus(Unplugged))
+    {
+      // We don't have good data from the controller.
+      //Wait 15ms, Update USB, and try again
+      delay(15);
+      Usb.Task();
+      if(!PS3Nav2->getStatus(Plugged) && !PS3Nav2->getStatus(Unplugged))
+      {
+        badPS3Data++;
+        #ifdef SHADOW_DEBUG
+          output += "\r\nInvalid data from PS3 Secondary Controller.";
+        #endif
+        return true;
+      }
+    }
+    else if (badPS3Data > 0)
+    {
+      badPS3Data = 0;
+    }
+  
+    if ( badPS3Data > 10 )
+    {
+      #ifdef SHADOW_DEBUG
+        output += "Too much bad data coming from the PS3 Secondary Controller\r\n";
+        output += "Disconnecting the controller.\r\n";
+      #endif
+      SyR->stop();
+      PS3Nav2->disconnect();
+      return true;
+    }
+  }
+  
+  return false;
+}
+// =======================================================================================
+// //////////////////////////END of PS3 Secondary Controller Fault Detection//////////////
+// =======================================================================================
+
+
+// =======================================================================================
+// //////////////////////////Mixing Function for R/C Mode////////////////////////////////
+// =======================================================================================
+#if FOOT_CONTROLLER == 1
+int leftFoot,rightFoot; //will hold foot speed values (-100 to 100)
+void mixBHD(byte stickX, byte stickY, byte maxDriveSpeed){  
+    // This is BigHappyDude's mixing function, for differential (tank) style drive using two motor controllers.
+    // Takes a joysticks X and Y values, mixes using the diamind mix, and output a value 0-180 for left and right motors.     
+    // 180,180 = both feet full speed forward.
+    // 000,000 = both feet full speed reverse.
+    // 180,000 = left foot full forward, right foot full reverse (spin droid clockwise)
+    // 000,180 = left foot full reverse, right foot full forward (spin droid counter-clockwise)
+    // 090,090 = no movement
+    // for simplicity, we think of this diamond matrix as a range from -100 to +100 , then map the final values to servo range (0-180) at the end 
+    //  Ramping and Speed mode applied on the droid.  
+    if(((stickX <= 113) || (stickX >= 141)) || ((stickY <= 113) || (stickY >= 141))){  //  if movement outside deadzone
+      //  Map to easy grid -100 to 100 in both axis, including deadzones.
+      int YDist = 0;  // set to 0 as a default value if no if used.
+      int XDist = 0;
+      if(stickY <= 113){
+       YDist = (map(stickY, 0, 113, 100, 1));           //  Map the up direction stick value to Drive speed
+      } else if(stickY >= 141){
+       YDist = (map(stickY, 141, 255, -1, -100));       //  Map the down direction stick value to Drive speed
+      }
+      if(stickX <= 113){
+       XDist = (map(stickX, 0, 113, -100, -1));       //  Map the left direction stick value to Turn speed
+      } else if(stickX >= 141){
+       XDist = (map(stickX, 141, 255, 1, 100));   //  Map the right direction stick value to Turn speed
+      }
+      //  Constrain to Diamond values.  using 2 line equations and find the intersect, boiled down to the minimum
+      //  This was the inspiration; https://github.com/declanshanaghy/JabberBot/raw/master/Docs/Using%20Diamond%20Coordinates%20to%20Power%20a%20Differential%20Drive.pdf 
+      float TempYDist = YDist;
+      float TempXDist = XDist;
+      if (YDist>(XDist+100)) {  //  if outside top left.  equation of line is y=x+Max, so if y > x+Max then it is above line
+        // OK, the first fun bit. :)  so for the 2 lines this is always true y = m1*x + b1 and y = m2*x - b2
+        // y - y = m1*x + b1  - m2*x - b2  or 0 = (m1 - m2)*x + b1 - b2
+        // We have y = x+100 and y = ((change in y)/Change in x))x
+        // So:   x = -100/(1-(change in y)/Change in x)) and using y = x+100 we can find y with the new x
+        // Not too bad when simplified. :P
+        TempXDist = -100/(1-(TempYDist/TempXDist));
+        TempYDist = TempXDist+100;
+      } else if (YDist>(100-XDist)) {  //  if outside top right
+        // repeat intesection for y = 100 - x
+        TempXDist = -100/(-1-(TempYDist/TempXDist));
+        TempYDist = -TempXDist+100;
+      } else if (YDist<(-XDist-100)) {  //  if outside bottom left
+        // repeat intesection for y = -x - 100
+        TempXDist = 100/(-1-(TempYDist/TempXDist));
+        TempYDist = -TempXDist-100;
+      } else if (YDist<(XDist-100)) {  //  if outside bottom right
+        // repeat intesection for y = x - 100
+        TempXDist = 100/(1-(TempYDist/TempXDist));
+        TempYDist = TempXDist-100;
+      }
+      //  all coordinates now in diamond. next translate to the diamond coordinates.
+      //  for the left.  send ray to y = x + Max from coordinates along y = -x + b
+      //  find for b, solve for coordinates and resut in y then scale using y = (y - max/2)*2
+      float LeftSpeed = ((TempXDist+TempYDist-100)/2)+100;
+      LeftSpeed = (LeftSpeed-50)*2;
+      //  for right send ray to y = -x + Max from coordinates along y = x + b find intersction coordinates and then use the Y vaule and scale.
+      float RightSpeed = ((TempYDist-TempXDist-100)/2)+100;
+      RightSpeed = (RightSpeed-50)*2;
+      //  this results in a -100 to 100 range of speeds, so shift to servo range.
+      map(maxDriveSpeed, 0, 127, 90, 180); //drivespeed was defined as 0 to 127 for Sabertooth serial, now we want something in an upper servo range (90 to 180)
+      #if leftDirection == 0
+      leftFoot=map(LeftSpeed, -100, 100, 180, 0);
+      #else
+      leftFoot=map(LeftSpeed, -100, 100, 0, 180);
+      #endif
+      #if rightDirection == 0
+      rightFoot=map(RightSpeed, -100, 100, 180, 0);
+      #else
+      rightFoot=map(RightSpeed, -100, 100, 0, 180);
+      #endif
+    } else {
+      leftFoot=90;
+      rightFoot=90;
+    }      
+}
+#endif                                     
+
+// =======================================================================================
+// ////////////////////////END:  Mixing Function for R/C Mode/////////////////////////////
+// =======================================================================================
+
+
+// quick function to stop the feet depending on which drive system we're using...
+void stopFeet() {
+  #if FOOT_CONTROLLER == 0
+  ST->stop();
+  #elif FOOT_CONTROLLER == 1
+  leftFootSignal.write(90);
+  rightFootSignal.write(90);
+  #endif
+}
 
 
 boolean ps3FootMotorDrive(PS3BT* myPS3 = PS3Nav)
@@ -736,21 +1014,23 @@ boolean ps3FootMotorDrive(PS3BT* myPS3 = PS3Nav)
                 output += "Drive Stick is disabled\r\n";
               }
             #endif
-          ST->stop();
+          stopFeet();
           isFootMotorStopped = true;
       } else if (!myPS3->PS3NavigationConnected)
       {
-          ST->stop();
+          stopFeet();
           isFootMotorStopped = true;
       } else if ( myPS3->getButtonPress(L1) )
       {
           //TODO:  Does this need to change this when we support dual controller, or covered by improved isStickEnabled
-          ST->stop();
+          stopFeet();
           isFootMotorStopped = true;
       } else
       {
+          //make those feet move!!!///////////////////////////////////////////////////
           int joystickPosition = myPS3->getAnalogHat(LeftHatY);
           isFootMotorStopped = false;
+          #if FOOT_CONTROLLER == 0
           if (myPS3->getButtonPress(L2))
           {
             int throttle = 0;
@@ -796,7 +1076,7 @@ boolean ps3FootMotorDrive(PS3BT* myPS3 = PS3Nav)
               turnnum = (map(myPS3->getAnalogHat(LeftHatX), 201, 255, turnspeed/3, turnspeed));
           else if (turnnum < 54)
               turnnum = (map(myPS3->getAnalogHat(LeftHatX), 0, 53, -turnspeed, -(turnspeed/3)));
-
+          #endif
 
           currentMillis = millis();
           if ( (currentMillis - previousFootMillis) > serialLatency  )
@@ -821,12 +1101,21 @@ boolean ps3FootMotorDrive(PS3BT* myPS3 = PS3Nav)
           }
           #endif
 
-
+          #if FOOT_CONTROLLER == 0
           ST->turn(turnnum * invertTurnDirection);
           ST->drive(footDriveSpeed);
           // The Sabertooth won't act on mixed mode packet serial commands until
           // it has received power levels for BOTH throttle and turning, since it
           // mixes the two together to get diff-drive power levels for both motors.
+          #elif FOOT_CONTROLLER == 1
+            //Experimental Q85. Untested Madness!!! Use at your own risk and expect your droid to run away in flames.
+            //use BigHappyDude's mixing algorythm to get values for each foot...
+            if (myPS3->getButtonPress(L2)) mixBHD(myPS3->getAnalogHat(LeftHatX),myPS3->getAnalogHat(LeftHatY),drivespeed2);
+            else mixBHD(myPS3->getAnalogHat(LeftHatX),myPS3->getAnalogHat(LeftHatY),drivespeed1);
+            //now we've got values for leftFoot and rightFoot, output those somehow...
+            leftFootSignal.write(leftFoot);
+            rightFootSignal.write(rightFoot);
+          #endif
            previousFootMillis = currentMillis;
           return true; //we sent a foot command   
           }
@@ -834,7 +1123,6 @@ boolean ps3FootMotorDrive(PS3BT* myPS3 = PS3Nav)
   }
   return false;
 }
-
 
 int ps3DomeDrive(PS3BT* myPS3 = PS3Nav, int controllerNumber = 1)
 {
@@ -851,6 +1139,20 @@ int ps3DomeDrive(PS3BT* myPS3 = PS3Nav, int controllerNumber = 1)
         domeRotationSpeed = (map(joystickPosition, 0, 255, -domespeed, domespeed));
         if ( abs(joystickPosition-128) < joystickDomeDeadZoneRange ) 
           domeRotationSpeed = 0;
+          
+		//TODO: DMB:  do we want to automatically disable dome automation?
+        /*        if (domeRotationSpeed != 0 && isAutomateDomeOn == true)  // Turn off dome automation if manually moved
+        {   
+            isAutomateDomeOn = false; 
+            domeStatus = 0;
+            domeTargetPosition = 0; 
+            
+            #ifdef SHADOW_DEBUG
+              output += "Dome Automation OFF\r\n";
+            #endif
+
+        }
+		*/
     }
     return domeRotationSpeed;
 }
@@ -862,7 +1164,7 @@ void rotateDome(int domeRotationSpeed, String mesg)
     // 1.) Eliminate a constant stream of "don't spin" messages (isDomeMotorStopped flag)
     // 2.) Add a delay between commands sent to the SyRen (previousDomeMillis timer)
     // 3.) Switch to real UART on the MEGA (Likely the *CORE* issue and solution)
-    // 4.) Reduce the timout of the SyRen - just better for safety!
+    // 4.) Reduce the time-out of the SyRen - just better for safety!
     
     currentMillis = millis();
     if ( (!isDomeMotorStopped || domeRotationSpeed != 0) && ((currentMillis - previousDomeMillis) > (2*serialLatency) )  )
@@ -1206,11 +1508,11 @@ void ps3ToggleSettings(PS3BT* myPS3 = PS3Nav)
     }
 
   
-  //// enable / disable right stick & play sound
+    // enable / disable Drive stick & play sound
     if(myPS3->getButtonPress(PS)&&myPS3->getButtonClick(CROSS))
     {
         #ifdef SHADOW_DEBUG
-          output += "Disiabling the DriveStick\r\n";
+          output += "Disabling the DriveStick\r\n";
         #endif
         isStickEnabled = false;
 //        trigger.play(52);
@@ -1221,7 +1523,7 @@ void ps3ToggleSettings(PS3BT* myPS3 = PS3Nav)
           output += "Enabling the DriveStick\r\n";
         #endif
         isStickEnabled = true;
-///        trigger.play(53);
+//        trigger.play(53);
     }
 
 
@@ -1249,12 +1551,18 @@ void ps3ToggleSettings(PS3BT* myPS3 = PS3Nav)
 
     if(myPS3->getButtonPress(L2)&&myPS3->getButtonClick(CROSS))
     {
+	  if(isAutomateDomeOn)
+      {
         #ifdef SHADOW_DEBUG
           output += "Disabling the Dome Automation\r\n";        
         #endif
         isAutomateDomeOn = false;
+        domeStatus = 0;
+        domeTargetPosition = 0;
+        SyR->stop();
         action = 0;
-//        trigger.play(53);
+//        trigger.play(66);
+	  }
     }
     if(myPS3->getButtonPress(L2)&&myPS3->getButtonClick(CIRCLE))
     {
@@ -1262,7 +1570,7 @@ void ps3ToggleSettings(PS3BT* myPS3 = PS3Nav)
           output += "Enabling the Dome Automation\r\n";
         #endif
         isAutomateDomeOn = true;
-//        trigger.play(52);
+//        trigger.play(65);
     }
 
 
@@ -1780,10 +2088,12 @@ void soundControl()
     {
       int inByte = Serial1.read();
       Serial.write(inByte);         
+      #ifdef BLUETOOTH_SERIAL
       if (SerialBT.connected)
       {
         SerialBT.write(inByte);
       }
+      #endif
     }
     #endif
 }  
@@ -1849,7 +2159,9 @@ void moveUtilArm(int arm, int position)
     }
 }
 
-
+// =======================================================================================
+//          Flash Coin Slot LED Function
+// =======================================================================================
 void flashCoinSlotLEDs()
 {
   for(int i = 0; i<numberOfCoinSlotLEDs; i++)
@@ -1969,5 +2281,3 @@ void testPS3Controller(PS3BT* myPS3 = PS3Nav)
     }          
 }
 #endif
-
-
