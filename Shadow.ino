@@ -963,17 +963,31 @@ void mixBHD(byte stickX, byte stickY, byte maxDriveSpeed){
       float RightSpeed = ((TempYDist-TempXDist-100)/2)+100;
       RightSpeed = (RightSpeed-50)*2;
       //  this results in a -100 to 100 range of speeds, so shift to servo range.
-      map(maxDriveSpeed, 0, 127, 90, 180); //drivespeed was defined as 0 to 127 for Sabertooth serial, now we want something in an upper servo range (90 to 180)
+
+      /* Debugging by KnightShade: Paul's submission didn't control the droid speed like we expected.
+      It always mapped the joystick to the full range of the motor controller, not limited by the input maxDriveSpeed
+
+      This code is still **EXPERIMENTAL**
+      This code has passed initial testing in a live droid with NEO motors, but needs burn in
+
+      First pass, we will treat the throttle as ON/OFF - not read Analog values (as we do with the Sabertooth logic)
+      The % of speed is based on the stick, not the analog trottle.
+      A drive speed is passed in, and we will use that to influence how much speed ot use
+      */
+      int maxServoForward = map(maxDriveSpeed, 0, 127, 90, 180); //drivespeed was defined as 0 to 127 for Sabertooth serial, now we want something in an upper servo range (90 to 180)
+      int maxServoReverse = map(maxDriveSpeed, 0, 127, 90, 0); //drivespeed was defined as 0 to 127 for Sabertooth serial, now we want something in an upper servo range (90 to 0)
       #if leftDirection == 0
-      leftFoot=map(LeftSpeed, -100, 100, 180, 0);
+      leftFoot=map(LeftSpeed, -100, 100, maxServoForward, maxServoReverse);
       #else
-      leftFoot=map(LeftSpeed, -100, 100, 0, 180);
+      leftFoot=map(LeftSpeed, -100, 100, maxServoReverse, maxServoForward);
       #endif
       #if rightDirection == 0
-      rightFoot=map(RightSpeed, -100, 100, 180, 0);
+      rightFoot=map(RightSpeed, -100, 100, maxServoForward, maxServoReverse);
       #else
-      rightFoot=map(RightSpeed, -100, 100, 0, 180);
+      rightFoot=map(RightSpeed, -100, 100, maxServoReverse, maxServoForward);
       #endif
+      /*  END Knightshade Debug */
+
     } else {
       leftFoot=90;
       rightFoot=90;
