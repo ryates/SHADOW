@@ -66,7 +66,7 @@ String PS3MoveNavigatonPrimaryMAC = "00:07:04:05:EA:DF"; //If using multiple con
 #define FOOT_CONTROLLER 1 //0 for Sabertooth Serial or 1 for individual R/C output (for Q85/NEO motors with 1 controller for each foot, or Sabertooth Mode 2 Independant Mixing)
 
 byte drivespeed1 = 25;   //set these 3 to whatever speeds work for you. 0-stop, 127-full speed.
-byte drivespeed2 = 127;  //Recommend beginner: 50 to 75, experienced: 100 to 127, I like 100.
+byte drivespeed2 = 65;  //Recommend beginner: 50 to 75, experienced: 100 to 127, I like 100.
 
 byte turnspeed = 75; //50;     // the higher this number the faster it will spin in place, lower - easier to control.
                          // Recommend beginner: 40 to 50, experienced: 50 $ up, I like 75
@@ -929,6 +929,28 @@ void mixBHD(byte stickX, byte stickY, byte maxDriveSpeed){
       } else if(stickX >= 141){
        XDist = (map(stickX, 141, 255, 1, 100));   //  Map the right direction stick value to Turn speed
       }
+
+      /* Debugging by KnightShade 
+      //Driving is TOO sensitive.   Need to dial down the turning to a different scale factor.
+      This code will map teh linear values to a flatter value range.
+
+      //The larger SteeringFactor is the less senstitive steering is...  
+      //Smaller values give more accuracy in making fine steering corrections
+        XDist*sqrt(XDist+SteeringFactor)
+      */
+      //Convert from Linear to a scaled/exponential Steering system
+      int SteeringFactor = 100; //TODO - move a constant at top of script
+      int TempScaledXDist =  (int) (abs(XDist)*sqrt(abs(XDist)+SteeringFactor));
+      int MaxScale = (100*sqrt(100+SteeringFactor));
+      XDist = (map(stickX, 0, MaxScale, 1, 100));       //  Map the left direction stick value to Turn speed
+            
+      if(stickX <= 113){
+        XDist = -1*(map(TempScaledXDist, 0, MaxScale, 1, 100));  //  Map the left direction stick value to Turn speed
+      } else if(stickX >= 141){
+        XDist = (map(TempScaledXDist, 0, MaxScale, 1, 100));   //  Map the right direction stick value to Turn speed
+      }
+      //END Convert from Linear to a scaled/exponential Steering system
+      
       //  Constrain to Diamond values.  using 2 line equations and find the intersect, boiled down to the minimum
       //  This was the inspiration; https://github.com/declanshanaghy/JabberBot/raw/master/Docs/Using%20Diamond%20Coordinates%20to%20Power%20a%20Differential%20Drive.pdf 
       float TempYDist = YDist;
@@ -964,15 +986,21 @@ void mixBHD(byte stickX, byte stickY, byte maxDriveSpeed){
       RightSpeed = (RightSpeed-50)*2;
       //  this results in a -100 to 100 range of speeds, so shift to servo range.
 
-      /* Debugging by KnightShade: Paul's submission didn't control the droid speed like we expected.
-      It always mapped the joystick to the full range of the motor controller, not limited by the input maxDriveSpeed
-
-      This code is still **EXPERIMENTAL**
-      This code has passed initial testing in a live droid with NEO motors, but needs burn in
-
-      First pass, we will treat the throttle as ON/OFF - not read Analog values (as we do with the Sabertooth logic)
-      The % of speed is based on the stick, not the analog trottle.
-      A drive speed is passed in, and we will use that to influence how much speed ot use
+      /* Debugging by KnightShade - this didn't do the speed like we expected.  Notice that they are constant values.....
+      // map(maxDriveSpeed, 0, 127, 90, 180); //drivespeed was defined as 0 to 127 for Sabertooth serial, now we want something in an upper servo range (90 to 180)
+      #if leftDirection == 0
+      leftFoot=map(LeftSpeed, -100, 100, 180, 0);
+      #else
+      leftFoot=map(LeftSpeed, -100, 100, 0, 180);
+      #endif
+      #if rightDirection == 0
+      rightFoot=map(RightSpeed, -100, 100, 180, 0);
+      #else
+      rightFoot=map(RightSpeed, -100, 100, 0, 180);
+      #endif
+      
+      First pass, treat the throttle as ON/OFF - not an Analog shift (as Sabertooth code does)
+      Based on that Paul passed in Drive Speed 1 or 2.
       */
       int maxServoForward = map(maxDriveSpeed, 0, 127, 90, 180); //drivespeed was defined as 0 to 127 for Sabertooth serial, now we want something in an upper servo range (90 to 180)
       int maxServoReverse = map(maxDriveSpeed, 0, 127, 90, 0); //drivespeed was defined as 0 to 127 for Sabertooth serial, now we want something in an upper servo range (90 to 0)
@@ -987,7 +1015,6 @@ void mixBHD(byte stickX, byte stickY, byte maxDriveSpeed){
       rightFoot=map(RightSpeed, -100, 100, maxServoReverse, maxServoForward);
       #endif
       /*  END Knightshade Debug */
-
     } else {
       leftFoot=90;
       rightFoot=90;
