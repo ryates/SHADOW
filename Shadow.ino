@@ -61,7 +61,7 @@
 //String PS3MoveNavigatonPrimaryMAC = "04:76:6E:87:B0:F5"; //If using multiple controlers, designate a primary
 
 //Primary Controller bound to Parani UD-100 
-String PS3MoveNavigatonPrimaryMAC = "00:07:04:05:EA:DF"; //If using multiple controlers, designate a primary
+String PS3MoveNavigatonPrimaryMAC = "00:15:83:E9:3A:56"; //If using multiple controlers, designate a primary
 
 #define FOOT_CONTROLLER 1 //0 for Sabertooth Serial or 1 for individual R/C output (for Q85/NEO motors with 1 controller for each foot, or Sabertooth Mode 2 Independant Mixing)
 
@@ -98,7 +98,7 @@ int time360DomeTurnRight = 300;  // milliseconds for dome to complete 360 turn a
 //                          Drive Controller Settings
 // ---------------------------------------------------------------------------------------
 
-int motorControllerBaudRate = 9600; // Set the baud rate for the Syren motor controller
+int motorControllerBaudRate = 2400; // Set the baud rate for the Syren motor controller
                                     // for packetized options are: 2400, 9600, 19200 and 38400
                                     
 #define SYREN_ADDR         129      // Serial Address for Dome Syren
@@ -115,8 +115,8 @@ int motorControllerBaudRate = 9600; // Set the baud rate for the Syren motor con
 //                          Sound Settings
 // ---------------------------------------------------------------------------------------
 //Uncomment one line based on your sound system
-#define SOUND_CFSOUNDIII     //Original system tested with SHADOW
-//#define SOUND_MP3TRIGGER   //Code Tested by Dave C. and Marty M.
+//#define SOUND_CFSOUNDIII     //Original system tested with SHADOW
+#define SOUND_MP3TRIGGER   //Code Tested by Dave C. and Marty M.
 //#define SOUND_ROGUE_RMP3   //Support coming soon
 //#define SOUND_RASBERRYPI   //Support coming soon
 
@@ -2321,4 +2321,10 @@ void testPS3Controller(PS3BT* myPS3 = PS3Nav)
         }
     }          
 }
+<<<<<<< Updated upstream
 #endif
+=======
+#endif
+
+
+>>>>>>> Stashed changes
